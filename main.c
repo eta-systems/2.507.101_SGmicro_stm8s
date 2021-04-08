@@ -13,6 +13,8 @@
   * @note    stm8s001j3
   * @note    IAR Embedded Workbench for STM8 v3.11.1
   * 
+  * 
+  * 
   ******************************************************************************
   * Copyright (c) 2021 eta Systems GmbH
   ******************************************************************************
@@ -29,6 +31,11 @@
 /* Private define ------------------------------------------------------------*/
 #define TIM4_PERIOD       124
 #define TIM2_PERIOD       1024
+
+#define ADC_CHANNEL_VBAT  ADC1_CHANNEL_6
+#define ADC_CHANNEL_DIMM  ADC1_CHANNEL_5
+
+#define VAL_RED_TO_GREEN  4
 /* Private macro -------------------------------------------------------------*/
 
 /* Private variables ---------------------------------------------------------*/
@@ -45,6 +52,7 @@ void ADC_Config(void);
 void _delay_ms(u16);
 void uptime_routine(void);
 void ADC_update(void);
+u16 ADC1_ReadVal(ADC1_Channel_TypeDef);
 
 /* Private user code ---------------------------------------------------------*/
 void main( void )
@@ -53,7 +61,7 @@ void main( void )
   CLK_Config();
   TIM4_Config();
   GPIO_Config();
-  ADC_Config();
+  // ADC_Config();
   
   enableInterrupts();
   
@@ -62,6 +70,7 @@ void main( void )
   ADC_Vbat = 0;
   ADC_Dimm  = 0;
   u16 brightness = 0;
+  BitStatus swLED = RESET;
   
   // INOLUX RGBW LED
   RGBColor_t LED51;
@@ -73,18 +82,22 @@ void main( void )
   rgb_SendArray();
   
   /* Infinite Loop -----------------------------------------------------------*/
+  
+  /*
+  while(1){
+    // @note Test RGB Color Cycle "Glitzer" :)))
+    rainbowCycle(10);
+  }
+  */
+  
   while(1)
-  { 
-    /** @note Test RGB Color Cycle "Glitzer" :))) */
-    // rainbowCycle(10); 
+  {
+    // Switch and ADC polling
+    ADC_Vbat = ADC1_ReadVal( ADC_CHANNEL_VBAT );
+    ADC_Dimm = ADC1_ReadVal( ADC_CHANNEL_DIMM );
+    swLED = GPIO_ReadInputPin(GPIOB, GPIO_PIN_4);
     
-    // ADC polling
-    ADC_update();
-    
-    // Update Power LED PWM brightness
-    brightness = (ADC_Dimm > 1023) ? 1023 : ADC_Dimm;
-    // TIM2_SetCompare3(brightness);
-    
+    // RGB LED BATTERY STATUS
     /** @todo Hysteresis when charging */
     // calculate Battery charge state
     // R-divider of 100k / 47k --> 47/147 = 0.319 = 1/3.127
@@ -93,6 +106,9 @@ void main( void )
     // --> above 480 = green
     // --> in between = orange
     // --> below 350 = red
+    
+    /*
+    LED51.W = 0;
     if(ADC_Vbat > 480){
       LED51.R = 0;
       LED51.G = 50;
@@ -103,29 +119,25 @@ void main( void )
       LED51.R = 50;
       LED51.G = 0;
     }
-    rgb_SetColor(0, LED51);
-    rgb_SendArray();  // update LEDs
-    
-    /** @todo send to deep sleep for ca. 100ms */
-    _delay_ms(100);
-    
-    /*
-    // TESTING
-    // quickly fade 1st White LED 
-    LED51.R = 0;
-    LED51.W = ++cnt%48;
-    rgb_SetColor(0, LED51);
-    
-    // represent ADC value as last Red LED 
-    LED51.B = (uint8_t) (ADC_Vbat >> 2);
-    LED51.R = (uint8_t) (ADC_Dimm >> 2);
-    LED51.W = 0;
-    rgb_SetColor(7, LED51);
-    
-    rgb_SendArray();  // update LEDs
-    _delay_ms(100);
     */
     
+    // POWER LED PWM
+    /** @todo PWM appears to be not working (?) */
+    brightness = (ADC_Dimm > 1023) ? 1023 : ADC_Dimm;
+    brightness /= 4; // convert to 8 Bit value
+    if(swLED == RESET){
+      LED51.W = brightness / 4;
+      TIM2_SetCompare3(brightness * 4);
+    }else{
+      LED51.W = 0;
+      TIM2_SetCompare3(0);
+    }
+    
+    rgb_SetColor(0, LED51);
+    rgb_SendArray();  // update LEDs
+    
+    /** @todo send to deep-sleep for ca. 10 - 100 ms */
+    _delay_ms(10);
   }
 }
 
@@ -175,50 +187,50 @@ void GPIO_Config(void)
   GPIO_DeInit(GPIOB);
   GPIO_DeInit(GPIOC);
   GPIO_DeInit(GPIOD);
-  GPIO_Init (GPIOA, GPIO_PIN_3, GPIO_MODE_OUT_PP_LOW_FAST); // Pin 5 - PA3 - LED PWM
-  GPIO_Init (GPIOB, GPIO_PIN_4, GPIO_MODE_OUT_PP_LOW_FAST); // Pin 6 - PB4 - LED On
-  GPIO_Init (GPIOC, GPIO_PIN_5, GPIO_MODE_OUT_PP_LOW_FAST); // Pin 7 - PC5 - RGB_LED RGBW Pulse Data
+  GPIO_Init (GPIOA, GPIO_PIN_3, GPIO_MODE_OUT_PP_LOW_FAST); // Pin 5 PA3 OUT - LED PWM
+  GPIO_Init (GPIOB, GPIO_PIN_4, GPIO_MODE_IN_FL_NO_IT);     // Pin 6 PB4 IN  - LED On Switch
+  GPIO_Init (GPIOC, GPIO_PIN_5, GPIO_MODE_OUT_PP_LOW_FAST); // Pin 7 PC5 OUT - RGB_LED RGBW Pulse Data
   
-  GPIO_Init (GPIOD, GPIO_PIN_5, GPIO_MODE_IN_FL_NO_IT);     // Pin 8 - PD5 - ADC Dim
-  GPIO_Init (GPIOD, GPIO_PIN_6, GPIO_MODE_IN_FL_NO_IT);     // Pin 8 - PD6 - ADC VBAT
+  GPIO_Init (GPIOD, GPIO_PIN_5, GPIO_MODE_IN_FL_NO_IT);     // Pin 8 PD5 ADC - LED Dimmer Value
+  GPIO_Init (GPIOD, GPIO_PIN_6, GPIO_MODE_IN_FL_NO_IT);     // Pin 1 PD6 ADC - Battery Voltage (Vbat)
   
 }
 
-/* ADC1 Init -----------------------------------------------------------------*/
+/* ADC1 Read -----------------------------------------------------------------*/
 /**
-  * @brief  Configure ADC peripheral 
-  * @param  None
-  * @retval None
+  * @brief  Configure ADC1 channel, read several values and return average
+  * @param  ch the ADC1 channel to sample
+  * @retval 12 Bit ADC value
+  * @note   https://circuitdigest.com/microcontroller-projects/adc-on-stm8s-using-c-compiler-reading-multiple-adc-values-and-displaying-on-lcd
   */
-static void ADC_Config(void)
+u16 ADC1_ReadVal(ADC1_Channel_TypeDef ch)
 {
-  /* Initialise and configure ADC1 */
-  ADC1_DeInit();
-  
+  u16 v[4] = {0,0,0,0};
   ADC1_Init(ADC1_CONVERSIONMODE_CONTINUOUS,
-            ADC1_CHANNEL_5, 
-            ADC1_PRESSEL_FCPU_D18, 
-            ADC1_EXTTRIG_GPIO, 
-            DISABLE, 
-            ADC1_ALIGN_RIGHT, 
-            ADC1_SCHMITTTRIG_CHANNEL5, 
-            DISABLE ); 
-  
-   ADC1_Init(ADC1_CONVERSIONMODE_CONTINUOUS,
-             ADC1_CHANNEL_6,
+             ch,
              ADC1_PRESSEL_FCPU_D18,
-             ADC1_EXTTRIG_GPIO,
+             ADC1_EXTTRIG_TIM,
              DISABLE,
              ADC1_ALIGN_RIGHT,
-             ADC1_SCHMITTTRIG_CHANNEL6,
+             ADC1_SCHMITTTRIG_ALL,
              DISABLE);
-
-   //ADC1_ITConfig(ADC1_IT_EOCIE, ENABLE);  // Interrupt Mode not working 
-   ADC1_ConversionConfig(ADC1_CONVERSIONMODE_CONTINUOUS, 
-                         ((ADC1_Channel_TypeDef)(ADC1_CHANNEL_5 | ADC1_CHANNEL_6)), 
-                         ADC1_ALIGN_RIGHT);
-   ADC1_DataBufferCmd(ENABLE);
-   ADC1_Cmd(ENABLE);
+  
+  ADC1_Cmd(ENABLE);
+  ADC1_StartConversion();
+  
+  for(u8 i=0; i<4; i++){
+    while(ADC1_GetFlagStatus(ADC1_FLAG_EOC) == RESET);
+    v[i] = ADC1_GetConversionValue();
+    ADC1_ClearFlag(ADC1_FLAG_EOC);
+  }
+  ADC1_DeInit();
+  
+  // averaging
+  u32 val = 0;
+  for(u8 i=0; i<4; i++){
+    val += v[i];
+  }
+  return (u16)(val/4);
 }
 
 /* Timer4 Init ---------------------------------------------------------------*/
