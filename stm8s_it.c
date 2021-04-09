@@ -5,7 +5,6 @@
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
-extern uint16_t ADCdata;
 /* Private function prototypes -----------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
 /* Public functions ----------------------------------------------------------*/
@@ -390,14 +389,6 @@ INTERRUPT_HANDLER(I2C_IRQHandler, 19)
   */
  INTERRUPT_HANDLER(ADC1_IRQHandler, 22)
 {
-    // ADCdata = ADC1_GetConversionValue();
-    // ADC1_ClearITPendingBit(ADC1_IT_EOCIE);  // WARINING!! CRASHES THE CPU (assert failed)
-    
-    // https://community.st.com/s/question/0D50X00009XkatO/adc-1-problem-with-stm8sdiscovery
-    // ADC1->CSR &= (uint8_t)(~ADC1_CSR_CH);
-    // ADC1->CSR |= (uint8_t)(ADC1_CHANNEL_5);
-    // ADC1->CR1 &= (uint8_t)(~ADC1_CR1_CONT);
-    
     /* In order to detect unexpected events during development,
        it is recommended to set a breakpoint on the following instruction.
     */

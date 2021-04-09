@@ -7,13 +7,17 @@
   *           - reads ADC value for Power LED brightness
   *           - PWM control of white Power LED
   * @author  simon.burkhardt@eta-systems.ch
-  * @version 0.1
-  * @date    2021-03-06
+  * @version 0.3
+  * @date    2021-04-09
   * 
-  * @note    stm8s001j3
+  * @note    stm8s001j3Mx
   * @note    IAR Embedded Workbench for STM8 v3.11.1
+  *          PC-locked license
+  *          IAR for STMicroelectronics STM8, 8K KickStart Edition 3.11
   * 
-  * 
+  * @note    see CubeMX PDF
+  *
+  * @note    Code Size: 5'457 bytes (approximately)
   * 
   ******************************************************************************
   * Copyright (c) 2021 eta Systems GmbH
@@ -39,9 +43,13 @@
 /* Private macro -------------------------------------------------------------*/
 
 /* Private variables ---------------------------------------------------------*/
-// uint16_t ADCdata = 0;  // is updated in stm8s_it.c
-volatile unsigned int ADC_Vbat, ADC_Dimm;
-uint32_t cnt = 0;
+static u32 uptime = 0;     // for delay routine
+static u32 delay_time = 0;
+volatile unsigned int adcVbat = 0;
+volatile unsigned int adcDimm = 0;
+u16 brightness = 0;
+BitStatus swLED = RESET;
+bool underVoltage = FALSE;
 
 /* Private function prototypes -----------------------------------------------*/
 void CLK_Config(void);
@@ -51,7 +59,6 @@ void GPIO_Config(void);
 void ADC_Config(void);
 void _delay_ms(u16);
 void uptime_routine(void);
-void ADC_update(void);
 u16 ADC1_ReadVal(ADC1_Channel_TypeDef);
 
 /* Private user code ---------------------------------------------------------*/
@@ -59,18 +66,13 @@ void main( void )
 {  
   /* MCU Configuration -------------------------------------------------------*/
   CLK_Config();
+  TIM2_Config();
   TIM4_Config();
   GPIO_Config();
-  // ADC_Config();
   
   enableInterrupts();
   
   TIM2_SetCompare3(0);  // Power LED PWM value (0 - 1023);
-  
-  ADC_Vbat = 0;
-  ADC_Dimm  = 0;
-  u16 brightness = 0;
-  BitStatus swLED = RESET;
   
   // INOLUX RGBW LED
   RGBColor_t LED51;
@@ -82,22 +84,18 @@ void main( void )
   rgb_SendArray();
   
   /* Infinite Loop -----------------------------------------------------------*/
-  
-  /*
-  while(1){
-    // @note Test RGB Color Cycle "Glitzer" :)))
-    rainbowCycle(10);
-  }
-  */
-  
   while(1)
   {
-    // Switch and ADC polling
-    ADC_Vbat = ADC1_ReadVal( ADC_CHANNEL_VBAT );
-    ADC_Dimm = ADC1_ReadVal( ADC_CHANNEL_DIMM );
+    /** @note Test RGB Color Cycle "Glitzer" :))) */
+    // rainbowCycle(10);
+    
+    /* Switch and ADC polling */
+    adcVbat = ADC1_ReadVal( ADC_CHANNEL_VBAT );
+    adcDimm = ADC1_ReadVal( ADC_CHANNEL_DIMM );
     swLED = GPIO_ReadInputPin(GPIOB, GPIO_PIN_4);
     
-    // RGB LED BATTERY STATUS
+    /* RGB LED BATTERY STATUS */
+    /** @todo Undervoltage Lockout for Power LED */
     /** @todo Hysteresis when charging */
     // calculate Battery charge state
     // R-divider of 100k / 47k --> 47/147 = 0.319 = 1/3.127
@@ -106,30 +104,34 @@ void main( void )
     // --> above 480 = green
     // --> in between = orange
     // --> below 350 = red
+    underVoltage = (adcVbat < 235) ? TRUE : FALSE;
     
-    /*
-    LED51.W = 0;
-    if(ADC_Vbat > 480){
-      LED51.R = 0;
-      LED51.G = 50;
-    } else if (ADC_Vbat > 350) {
-      LED51.R = 25;
-      LED51.G = 25;
+    if(underVoltage){
+      LED51.R = 10;
     } else {
-      LED51.R = 50;
-      LED51.G = 0;
+      LED51.W = 0;
+      if(adcVbat > 480){
+        LED51.R = 0;
+        LED51.G = 50;
+      } else if (adcVbat > 350) {
+        LED51.R = 20;
+        LED51.G = 10;
+      } else {
+        LED51.R = 50;
+        LED51.G = 0;
+      }
     }
-    */
     
-    // POWER LED PWM
-    /** @todo PWM appears to be not working (?) */
-    brightness = (ADC_Dimm > 1023) ? 1023 : ADC_Dimm;
-    brightness /= 4; // convert to 8 Bit value
+    /* POWER LED PWM */
+    brightness = (adcDimm > 1023) ? 1023 : adcDimm;  // should only be a 12 Bit value
+    brightness /= 4;  // convert to 8 Bit value
+    // @note: swLED is active LOW --> RESET = turn on
+    // (the swLED actually also turns on the DC supply for the STM8)
     if(swLED == RESET){
-      LED51.W = brightness / 4;
+      // LED51.W = brightness / 4;
       TIM2_SetCompare3(brightness * 4);
     }else{
-      LED51.W = 0;
+      // LED51.W = 0;
       TIM2_SetCompare3(0);
     }
     
@@ -139,17 +141,6 @@ void main( void )
     /** @todo send to deep-sleep for ca. 10 - 100 ms */
     _delay_ms(10);
   }
-}
-
-void ADC_update(void)
-{
-  // http://embedded-lab.com/blog/continuing-stm8-microcontroller-expedition/2/
-  ADC1_ScanModeCmd(ENABLE);
-  ADC1_StartConversion();
-  while(ADC1_GetFlagStatus(ADC1_FLAG_EOC) == RESET);
-  ADC1_ClearFlag(ADC1_FLAG_EOC);
-  ADC_Vbat = ADC1_GetBufferValue(0);
-  ADC_Dimm = ADC1_GetBufferValue(1);
 }
 
 /**
@@ -254,10 +245,6 @@ void TIM2_Config(void)
   TIM2_Cmd(ENABLE);
 }
 
-static u32 uptime = 0;
-static u32 delay_time = 0;
-u8 z = 0;
-
 /* Uptime Routine ------------------------------------------------------------*/
 /* called from TIM4 interrupt in stm8s_it.c */
 void uptime_routine(void)
@@ -267,13 +254,9 @@ void uptime_routine(void)
     delay_time = 0;
     uptime  = 0;
   }
-  z++;
-  if(z == 250){
-    z = 0;
-    GPIO_WriteReverse(GPIOB, GPIO_PIN_5);
-  }
 }
 
+/* Delay Routine -------------------------------------------------------------*/
 void _delay_ms(u16 wait)
 { 
   delay_time = uptime + wait;
